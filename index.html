@@ -119,6 +119,10 @@
   }
   .choice-btn:active { transform: scale(0.97); }
   .choice-btn.selected { border-color: var(--accent); border-width: 1.5px; background: var(--accent-soft); color: var(--accent); }
+  /* Status-recording buttons (Fasted/Missed/Rest/Unrecorded) get an
+     immediate, non-bouncy state change — no scale/press animation. */
+  .choice-btn.no-anim { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; }
+  .choice-btn.no-anim:active { transform: none; }
 
   /* ---- iOS-style grouped list (Settings) ---- */
   .list-group { background: var(--surface); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-sm); }
