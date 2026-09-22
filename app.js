@@ -588,31 +588,8 @@
         "</div></div>";
     }
 
-    // Last ~5 days (including today) as a compact, tappable strip —
-    // reuses the exact same cal-cell markup and dot language as
-    // Calendar, so it reads as the same indicator, not a new one.
-    var recentCells = [];
-    for (var i = 4; i >= 0; i--) {
-      recentCells.push(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i));
-    }
-    var recentDaysHtml =
-      '<div style="border-top:1px solid var(--border);padding-top:18px;margin-top:20px;">' +
-      '<p class="label-caps" style="margin-bottom:12px;">Recent days</p>' +
-      '<div style="display:grid;grid-template-columns:repeat(5,1fr);">' +
-      recentCells
-        .map(function (day) {
-          var isToday = dateOnly(day).getTime() === dateOnly(today).getTime();
-          if (isBeforePlanStart(segments, day)) {
-            return '<div class="cal-cell out-of-plan"><span style="font-size:13px;">' + day.getDate() + "</span></div>";
-          }
-          return (
-            '<button onclick="openDayDetail(\'' + toKey(day) + '\')" class="cal-cell' + (isToday ? " today" : "") + '">' +
-            '<span style="font-size:13px;">' + day.getDate() + "</span>" + dotHtmlFor(day) +
-            "</button>"
-          );
-        })
-        .join("") +
-      "</div></div>";
+    // Last 7 days rhythm — shared with Stats, see renderLast7Days().
+    var recentDaysHtml = renderLast7Days();
 
     // Always driven by the current schedule segments, so a schedule
     // change is reflected here immediately without any special-casing.
@@ -691,19 +668,40 @@
     render();
   };
 
-  // Shared with Calendar's day cells, so Home's Recent Days strip uses
-  // the exact same visual language (accent = fasted/upcoming, warning
-  // = missed, border = unrecorded) rather than inventing a new one.
+  // Shared by Calendar, Home, and Stats, so all three read the exact
+  // same visual language. Exactly four states, matching the Calendar
+  // legend one-to-one:
+  //   Expected fasting -> accent outline (not yet confirmed: future OR past-due)
+  //   Fasted            -> accent filled
+  //   Missed            -> warning filled
+  //   Rest              -> secondary outline, low opacity
   function dotHtmlFor(day) {
     var expected = expectedStatus(segments, day);
-    if (expected !== "FASTING") return "";
+    if (expected === null) return ""; // before the plan started
+    if (expected === "REST") {
+      return '<span class="cal-dot" style="background:none;border:1.3px solid var(--text-secondary);opacity:0.5;"></span>';
+    }
     var actual = getActual(records, day);
     if (actual === "FASTING") return '<span class="cal-dot" style="background:var(--accent);"></span>';
     if (actual === "MISSED") return '<span class="cal-dot" style="background:var(--warning);"></span>';
-    if (dateOnly(day).getTime() > dateOnly(new Date()).getTime()) {
-      return '<span class="cal-dot" style="background:none;border:1.5px solid var(--accent);"></span>';
-    }
-    return '<span class="cal-dot" style="background:var(--border);"></span>';
+    return '<span class="cal-dot" style="background:none;border:1.3px solid var(--accent);"></span>';
+  }
+  // Shared date-number + dot markup for every place that renders a
+  // calendar-style cell (Calendar's month grid and the Last 7 Days
+  // strip), so the "fasting days sit slightly higher" rhythm is
+  // consistent everywhere rather than a Calendar-only special case.
+  // Purely a visual hierarchy cue — never touches schedule/actual data.
+  function cellContentHtml(day, fontSize) {
+    var expected = expectedStatus(segments, day);
+    var lifted = expected === "FASTING"; // covers fasted/missed/unrecorded/upcoming — anything in "fasting position"
+    var numberColor = expected === "REST" ? "color:var(--text-secondary);" : "";
+    return (
+      '<span style="display:flex;flex-direction:column;align-items:center;gap:4px;' +
+      (lifted ? "transform:translateY(-4px);" : "") + '">' +
+      '<span style="font-size:' + fontSize + "px;" + numberColor + '">' + day.getDate() + "</span>" +
+      dotHtmlFor(day) +
+      "</span>"
+    );
   }
   // Walks forward from `fromDate` (exclusive) using the CURRENT
   // schedule segments, so if the pattern changes this always reflects
@@ -716,6 +714,66 @@
       if (expectedStatus(segments, cursor) === "FASTING") return cursor;
     }
     return null;
+  }
+
+  // Streaks count consecutive successfully-FASTED expected-fasting
+  // days. A scheduled REST day is skipped entirely (it neither
+  // extends nor breaks a streak). A MISSED or UNRECORDED expected
+  // fasting day resets the run to zero. This only ever reads
+  // `records`/segments — it can't and doesn't feed back into the
+  // schedule calculation.
+  function computeStreaks(segs, recs, uptoDate) {
+    if (!segs.length) return { current: 0, longest: 0 };
+    var start = dateOnly(fromKey(segs[0].startDate));
+    var end = dateOnly(uptoDate);
+    var running = 0;
+    var longest = 0;
+    var cursor = new Date(start);
+    while (cursor <= end) {
+      var expected = expectedStatus(segs, cursor);
+      if (expected === "FASTING") {
+        var actual = getActual(recs, cursor);
+        if (actual === "FASTING") {
+          running++;
+          if (running > longest) longest = running;
+        } else {
+          running = 0;
+        }
+      }
+      // REST days: skip, running carries through unchanged.
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+    }
+    return { current: running, longest: longest };
+  }
+
+  // Compact 7-day rhythm strip, tappable per day (opens the same day
+  // detail sheet as Calendar). Shared between Home and Stats so both
+  // stay in sync automatically.
+  function renderLast7Days() {
+    var today = new Date();
+    var days = [];
+    for (var i = 6; i >= 0; i--) {
+      days.push(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i));
+    }
+    var cells = days
+      .map(function (day) {
+        var isToday = dateOnly(day).getTime() === dateOnly(today).getTime();
+        if (isBeforePlanStart(segments, day)) {
+          return '<div class="cal-cell out-of-plan"><span style="font-size:12.5px;">' + day.getDate() + "</span></div>";
+        }
+        return (
+          '<button onclick="openDayDetail(\'' + toKey(day) + '\')" class="cal-cell' + (isToday ? " today" : "") + '">' +
+          cellContentHtml(day, 12.5) +
+          "</button>"
+        );
+      })
+      .join("");
+    return (
+      '<div style="border-top:1px solid var(--border);padding-top:18px;margin-top:20px;">' +
+      '<p class="label-caps" style="margin-bottom:12px;">Last 7 days</p>' +
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);">' + cells + "</div>" +
+      "</div>"
+    );
   }
 
   function renderCalendar() {
@@ -737,15 +795,13 @@
         continue;
       }
 
-      var dot = dotHtmlFor(day);
-
       // Every in-plan date is tappable — past, today, and future alike.
       // The day detail sheet itself decides what's editable (see
       // renderDayDetail): full recording for past/today, read-only
       // "expected" preview for future dates.
       cellsHtml +=
         '<button onclick="openDayDetail(\'' + key + '\')" class="cal-cell' + (isToday ? " today" : "") + '">' +
-        '<span style="font-size:15px;">' + d + "</span>" + dot +
+        cellContentHtml(day, 15) +
         "</button>";
     }
 
@@ -756,12 +812,14 @@
       })
       .join("");
 
+    // Very subtle — small dots, muted secondary-colored labels, no
+    // background/border box around it.
     var legend =
-      '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin-top:22px;">' +
+      '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:16px;margin-top:22px;opacity:0.85;">' +
+      legendItem("var(--accent)", true, "Expected fasting") +
       legendItem("var(--accent)", false, "Fasted") +
-      legendItem("var(--accent)", true, "Upcoming") +
       legendItem("var(--warning)", false, "Missed") +
-      legendItem("var(--border)", false, "Unrecorded") +
+      legendItem("var(--text-secondary)", true, "Rest") +
       "</div>";
 
     return (
@@ -779,7 +837,7 @@
     );
   }
   function legendItem(color, outline, label) {
-    var dotStyle = outline ? "background:none;border:1.5px solid " + color + ";" : "background:" + color + ";";
+    var dotStyle = outline ? "background:none;border:1.3px solid " + color + ";" : "background:" + color + ";";
     return (
       '<div style="display:flex;align-items:center;gap:6px;">' +
       '<span class="cal-dot" style="' + dotStyle + '"></span>' +
@@ -823,7 +881,7 @@
         .map(function (opt) {
           var selected = actual === opt[0];
           return (
-            '<button onclick="saveDayRecord(\'' + opt[0] + '\')" class="choice-btn' + (selected ? " selected" : "") + '" style="padding:14px 0;font-size:15px;">' +
+            '<button onclick="saveDayRecord(\'' + opt[0] + '\')" class="choice-btn no-anim' + (selected ? " selected" : "") + '" style="padding:14px 0;font-size:15px;">' +
             esc(opt[1]) + "</button>"
           );
         })
@@ -1008,6 +1066,7 @@
   function renderStats() {
     var today = new Date();
     var stats = computeStats(segments, records, fromKey(segments[0].startDate), today);
+    var streaks = computeStreaks(segments, records, today);
     var totalElapsed = stats.expectedFasting + stats.expectedRest;
     var hasEnoughData = totalElapsed >= 4;
     var percent = consistencyPercent(stats);
@@ -1018,14 +1077,20 @@
         '<p class="body-text text-secondary" style="margin-top:4px;">Keep recording your days.<br/>Your statistics will become more meaningful over time.</p>';
     } else {
       content =
-        '<div style="text-align:left;margin-bottom:32px;">' +
+        '<p class="label-caps" style="margin-bottom:10px;">Streak</p>' +
+        rowPair("Current streak", streaks.current + (streaks.current === 1 ? " day" : " days")) +
+        rowPair("Longest streak", streaks.longest + (streaks.longest === 1 ? " day" : " days")) +
+
+        '<div style="text-align:left;margin:26px 0 8px;">' +
+        '<p class="label-caps" style="margin-bottom:8px;">Consistency</p>' +
         '<div class="stat-number">' + percent + "%</div>" +
-        '<p class="label-caps" style="margin-top:8px;">Consistency</p>' +
         "</div>" +
-        rowPair("Fasting days", stats.completedFasting) +
-        rowPair("Missed days", stats.missed) +
-        rowPair("Unrecorded", stats.unrecorded) +
-        rowPair("Expected fasting", stats.expectedFasting);
+
+        '<p class="label-caps" style="margin:26px 0 10px;">Fasting rhythm</p>' +
+        rowPair("Expected", stats.expectedFasting) +
+        rowPair("Fasted", stats.completedFasting) +
+        rowPair("Missed", stats.missed) +
+        rowPair("Unrecorded", stats.unrecorded);
     }
 
     return (
@@ -1033,6 +1098,7 @@
       '<p class="label-caps" style="margin-bottom:6px;">Your progress</p>' +
       '<h1 class="title-large" style="margin-bottom:24px;">Statistics</h1>' +
       content +
+      renderLast7Days() +
       "</div>"
     );
   }
